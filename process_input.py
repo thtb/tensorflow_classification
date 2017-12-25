@@ -1,152 +1,198 @@
-"""Process input data into tensorflow examples, to ease training.
-
-Input data is in one of two formats:
-- facebook's format used in their fastText library.
-- two text files, one with input text per line, the other a label per line.
-"""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 import os.path
-import re
-import sys
 import tensorflow as tf
 from collections import Counter
-from six.moves import zip
-from nltk.tokenize import word_tokenize
 
-
-tf.flags.DEFINE_string("facebook_input", None,
-                       "Input file in facebook train|test format")
-tf.flags.DEFINE_string("text_input", None,
-                       """Input text file containing one text phrase per line.
-                       Must have --labels defined""")
-tf.flags.DEFINE_string("labels", None,
-                       """Input text file containing one label for
-                       classification  per line.
-                       Must have --text_input defined.""")
-tf.flags.DEFINE_string("ngrams", None,
-                       "list of ngram sizes to create, e.g. --ngrams=2,3,4,5")
+tf.flags.DEFINE_string("feature_file_prefix", "", "Feature file prefix")
 tf.flags.DEFINE_string("output_dir", ".",
-                       "Directory to store resulting vector models and checkpoints in")
+                       "Directory to store tfrecord, vocab and label.")
+tf.flags.DEFINE_boolean("is_fixed_length", False, "If set to be true, than ")
+tf.flags.DEFINE_integer("max_length", 2000,
+                        "Max length of features for one sample")
 tf.flags.DEFINE_integer("num_shards", 1,
-                        "Number of outputfiles to create")
+                        "Number of output_files to create.")
+tf.flags.DEFINE_integer("label_level", 1,
+                        "Level of label to use")
 FLAGS = tf.flags.FLAGS
 
 
-def CleanText(text):
-    return word_tokenise(text.lower())
-
-
-def NGrams(words, ngrams):
-    nglist = []
-    for word in words:
-        for ng in ngrams:
-            nglist.extend([word[n:n+ng] for n in range(len(word)-ng+1)])
-    return nglist
-
-
-def ParseFacebookInput(inputfile, ngrams):
-    """Parse input in the format used by facebook FastText.
-    labels are formatted as __label__1
-    where the label values start at 0.
+def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
+                                 is_fixed_length=False, max_length=2000,
+                                 level=1):
+    """Parse features
+    Input format: label\t(feature )+\tcomments
+    Label format: cate1--cate2--cate3
     """
-    examples = []
-    for line in open(inputfile):
-        words = line.split()
-        # label is first field with __label__ removed
-        match = re.match(r'__label__([0-9]+)', words[0])
-        label = int(match.group(1)) if match else None
-        # Strip out label and first ,
-        words = words[2:]
-        examples.append({
-            "text": words,
-            "label": label
-        })
-        if ngrams:
-            examples[-1]["ngrams"] = NGrams(words, ngrams)
-    return examples
+    print("parsing feature file %s" % train_feature_file)
+    category_separator = "--"
+    feature_count = Counter()
+    label_count = Counter()
+    sample_size = 0
+    label_index = 0
+    label_map = {}
+    id_label_map = {}
+    with open(train_feature_file) as f:
+        for line in f:
+            content = line.split('\t')
+            label_taxonomy = content[0].split(category_separator)
+            if len(label_taxonomy) < int(level):
+                continue
+
+            sample_size += 1
+            label_string = category_separator.join(label_taxonomy[0:level])
+            label = -1
+            if label_string in label_map:
+                label = label_map[label_string]
+            else:
+                label = label_index
+                label_map[label_string] = label_index
+                id_label_map[label_index] = label_string
+                label_index += 1
+            features = content[1].split(" ")
+
+            if is_fixed_length and len(features) >= max_length:
+                features = features[0:max_length]
+
+            feature_count.update(features)
+            label_count.update([label])
+
+            if is_fixed_length and len(features) < max_length:
+                for i in xrange(0, max_length - len(features)):
+                    features.append("_PAD")
+
+    print("sample size: %d" % sample_size)
+    print("label size: %d" % label_index)
+
+    feature_map = {}
+    feature_index = 0
+    feature_list = feature_count.most_common()
+    if is_fixed_length:
+        feature_list = [("_UNK", 0), ("_PAD", 0)] + feature_list
+    with open(vocab_file, "w") as f:
+        for feature in feature_list:
+            feature_map[feature[0]] = feature_index
+            feature_index += 1
+            f.write(feature[0] + '\n')
+    with open(label_file, "w") as f:
+        for label in label_count.most_common():
+            f.write("%s\t%s\n" % (label[0], id_label_map[label[0]]))
+
+    return feature_map, label_map
 
 
-def ParseTextInput(textfile, labelsfie, ngrams):
-    """Parse input from two text files: text and labels.
-    labels are specified 0-offset one per line.
+def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
+                 is_fixed_length=False, max_length=2000, level=1):
+    """Parse features
+    Input format: label\t(feature )+\tconments
+    Label format: cate1--cate2--cate3
     """
-    examples = []
-    with open(textfile) as f1, open(labelsfile) as f2:
-        for text, label in zip(f1, f2):
-            examples.append({
-                "text": CleanText(text),
-                "label": int(label),
+    print("parsing feature file %s" % feature_file)
+    category_separator = "--"
+    sample_size = 0
+    samples = []
+    with open(feature_file) as f:
+        for line in f:
+            content = line.split('\t')
+            label_taxonomy = content[0].split(category_separator)
+            if len(label_taxonomy) < int(level):
+                continue
+            label_string = category_separator.join(label_taxonomy[0:level])
+            label = -1
+            if label_string not in label_map:
+                print("wrong label of line: " + line)
+                continue
+
+            sample_size += 1
+            label = label_map[label_string]
+            features = content[1].split(" ")
+
+            # for rnn length should be fix
+            if is_fixed_length:
+                if len(features) > max_length:
+                    features = features[0:max_length]
+                features = [
+                    feature_map[x] if x in feature_map else feature_map["_UNK"]
+                    for x in features]
+                real_len.append(len(features))
+                if len(features) < max_length:
+                    features = features + [feature_map["_PAD"]] * (
+                            max_length - len(features))
+
+            # for fasttext only keep feature in feature_map
+            else:
+                features = filter(lambda x: x in feature_map, features)
+
+                features = [feature_map[x] for x in features]
+            real_len = len(features)
+            samples.append({
+                "features": features,
+                "label": label,
+                "real_len": real_len
             })
-            if ngrams:
-                examples[-1]["ngrams"] = NGrams(words, ngrams)
-    return examples
+
+    print("feature file %s has sample %d" % (feature_file, sample_size))
+    return samples
 
 
-def WriteExamples(examples, outputfile, num_shards):
-    """Write examles in TFRecord format.
-    Args:
-      examples: list of feature dicts.
-                {'text': [words], 'label': [labels]}
-      outputfile: full pathname of output file
+def write_tf_record(samples, output_file, num_shards=1):
+    """write samples in TFRecord format.
     """
     shard = 0
-    num_per_shard = len(examples) / num_shards + 1
-    for n, example in enumerate(examples):
+    num_per_shard = len(samples) / num_shards + 1
+    for n, sample in enumerate(samples):
         if n % num_per_shard == 0:
             shard += 1
-            writer = tf.python_io.TFRecordWriter(outputfile + '-%d-of-%d' % \
+            writer = tf.python_io.TFRecordWriter(output_file + '-%d-of-%d' %
                                                  (shard, num_shards))
-        record = tf.train.Example()
-        text = [tf.compat.as_bytes(x) for x in example["text"]]
-        record.features.feature["text"].bytes_list.value.extend(text)
-        record.features.feature["label"].int64_list.value.append(example["label"])
-        if "ngrams" in example:
-            ngrams = [tf.compat.as_bytes(x) for x in example["ngrams"]]
-            record.features.feature["ngrams"].bytes_list.value.extend(ngrams)
-        writer.write(record.SerializeToString())
-
-
-def WriteVocab(examples, vocabfile, labelfile):
-    words = Counter()
-    labels = set()
-    for example in examples:
-        words.update(example["text"])
-        labels.add(example["label"])
-    with open(vocabfile, "w") as f:
-        # Write out vocab in most common first order
-        # We need this as NCE loss in TF uses Zipf distribution
-        for word in words.most_common():
-            f.write(word[0] + '\n')
-    with open(labelfile, "w") as f:
-        labels = sorted(list(labels))
-        for label in labels:
-            f.write(str(label) + '\n')
+        tf_record = tf.train.Example()
+        for i in xrange(0, len(sample["features"])):
+            tf_record.features.feature["features"].int64_list.value.append(
+                sample["features"][i])
+        tf_record.features.feature["label"].int64_list.value.append(
+            sample["label"])
+        tf_record.features.feature["real_len"].int64_list.value.append(
+            sample["real_len"])
+        writer.write(tf_record.SerializeToString())
 
 
 def main(_):
-    # Check flags
-    if not (FLAGS.facebook_input or (FLAGS.text_input and FLAGS.labels)):
-        print >>sys.stderr, \
-            "Error: You must define either facebook_input or both text_input and labels"
-        sys.exit(1)
-    ngrams = None
-    if FLAGS.ngrams:
-        ngrams = [int(g) for g in FLAGS.ngrams.split(',')]
-        ngrams = [g for g in ngrams if (g > 1 and g < 7)]
-    if FLAGS.facebook_input:
-        inputfile = FLAGS.facebook_input
-        examples = ParseFacebookInput(FLAGS.facebook_input, ngrams)
-    else:
-        inputfile = FLAGS.text_input
-        examples = ParseTextInput(FLAGS.text_input, FLAGS.labels, ngrams)
-    outputfile = os.path.join(FLAGS.output_dir, inputfile + ".tfrecords")
-    WriteExamples(examples, outputfile, FLAGS.num_shards)
-    vocabfile = os.path.join(FLAGS.output_dir, inputfile + ".vocab")
-    labelfile = os.path.join(FLAGS.output_dir, inputfile + ".labels")
-    WriteVocab(examples, vocabfile, labelfile)
+    train_feature_file = FLAGS.feature_file_prefix + ".train"
+    test_feature_file = FLAGS.feature_file_prefix + ".test"
+    label_level = ".level" + str(FLAGS.label_level)
+
+    vocab_file = os.path.join(FLAGS.output_dir,
+                              FLAGS.feature_file_prefix
+                              + label_level + ".vocab")
+    label_file = os.path.join(FLAGS.output_dir,
+                              FLAGS.feature_file_prefix
+                              + label_level + ".labels")
+    feature_map, label_map = generate_vocab_and_label_map(train_feature_file,
+                                                          vocab_file,
+                                                          label_file,
+                                                          FLAGS.is_fixed_length,
+                                                          FLAGS.max_length,
+                                                          FLAGS.label_level)
+
+    train_samples = to_tf_record(train_feature_file, feature_map, label_map, -1,
+                                 FLAGS.is_fixed_length, FLAGS.max_length,
+                                 FLAGS.label_level)
+    output_file = os.path.join(FLAGS.output_dir,
+                               train_feature_file + label_level + ".tfrecord")
+    write_tf_record(train_samples, output_file, FLAGS.num_shards)
+
+    test_samples = to_tf_record(test_feature_file, feature_map, label_map, -1,
+                                FLAGS.is_fixed_length, FLAGS.max_length,
+                                FLAGS.label_level)
+    output_file = os.path.join(FLAGS.output_dir,
+                               test_feature_file + label_level + ".tfrecord")
+    write_tf_record(test_samples, output_file, 1)
+
+    with open(test_feature_file + ".gold_label", "w") as f:
+        for sample in test_samples:
+            f.write("%d\n" % sample["label"])
 
 
 if __name__ == '__main__':
