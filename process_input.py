@@ -43,7 +43,6 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
 
             sample_size += 1
             label_string = category_separator.join(label_taxonomy[0:level])
-            label = -1
             if label_string in label_map:
                 label = label_map[label_string]
             else:

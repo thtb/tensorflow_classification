@@ -1,10 +1,10 @@
 import tensorflow as tf
 
 
-def disordered_input_fn(mode,
-                        input_file,
-                        batch_size,
-                        num_epochs=1):
+def nn_input_fn(mode,
+                input_file,
+                batch_size,
+                num_epochs=1):
     if num_epochs <= 0:
         num_epochs = 1
 
@@ -40,13 +40,14 @@ def fasttext_input_fn(mode, input_file, batch_size, num_epochs=None,
         num_epochs = 1
 
     def input_fn():
-        keys_to_sample = {"features": tf.VarLenFeature(dtype=tf.int64)}
+        keys_to_sample = dict()
+        keys_to_sample["features"] = tf.VarLenFeature(dtype=tf.int64)
         keys_to_sample["label"] = tf.FixedLenFeature(shape=(1,),
-                                                       dtype=tf.int64,
-                                                       default_value=None)
+                                                     dtype=tf.int64,
+                                                     default_value=None)
 
         randomize_input = False
-        if mode == tf.estimator.ModeKeys.TRAIN :
+        if mode == tf.estimator.ModeKeys.TRAIN:
             randomize_input = True
         sample = tf.contrib.learn.read_batch_features(
             input_file, batch_size, keys_to_sample, tf.TFRecordReader,
