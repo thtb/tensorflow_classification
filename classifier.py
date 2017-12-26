@@ -4,6 +4,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import sys
+
 import numpy as np
 
 import tensorflow as tf
@@ -20,7 +22,7 @@ tf.flags.DEFINE_string("predict_records", None,
 tf.flags.DEFINE_string("label_file", None, "File containing output labels")
 tf.flags.DEFINE_string("vocab_file", None, "Vocabulary file, one word per line")
 tf.flags.DEFINE_integer("vocab_size", None, "Number of words in vocabulary")
-tf.flags.DEFINE_integer("num_oov_vocab_buckets", 20,
+tf.flags.DEFINE_integer("num_oov_vocab_buckets", 0,
                         "Number of hash buckets to use for OOV words")
 tf.flags.DEFINE_string("model_dir", ".",
                        "Output directory for checkpoints and summaries")
@@ -30,14 +32,9 @@ tf.flags.DEFINE_integer("embedding_dimension", 15,
                         "Dimension of word embedding")
 tf.flags.DEFINE_integer("attention_dimension", 16, "Dimension of attention")
 
-tf.flags.DEFINE_boolean("fast", False,
-                        "Run fastest training without full experiment")
 tf.flags.DEFINE_float("learning_rate", 0.001, "Learning rate for training")
 tf.flags.DEFINE_float("clip_gradient", 5.0, "Clip gradient norm to this ratio")
 tf.flags.DEFINE_integer("batch_size", 128, "Training minibatch size")
-tf.flags.DEFINE_integer("train_steps", 1000,
-                        "Number of train steps, None for continuous")
-tf.flags.DEFINE_integer("eval_steps", 100, "Number of eval steps")
 tf.flags.DEFINE_integer("num_epochs", None, "Number of training data epochs")
 tf.flags.DEFINE_integer("checkpoint_steps", 1000,
                         "Steps between saving checkpoints")
@@ -62,7 +59,6 @@ def fasttext_estimator(model_dir):
             [FLAGS.vocab_size + FLAGS.num_oov_vocab_buckets,
              FLAGS.embedding_dimension],
             -1.0 / FLAGS.embedding_dimension, 1.0 / FLAGS.embedding_dimension))
-        print(text_ids)
         # text_embedding = tf.nn.embedding_lookup(text_embedding_w, text_ids)
         # attention_matrix = tf.contrib.layers.fully_connected(inputs=text_embedding, num_outputs=FLAGS.attention_dimension, activation_fn=tf.nn.tanh)
         # attention_vector = tf.Variable(tf.random_uniform([FLAGS.attention_dimension], -1.0 / FLAGS.attention_dimension, 1.0 / FLAGS.attention_dimension))
@@ -115,8 +111,6 @@ def fasttext_estimator(model_dir):
         log_device_placement=FLAGS.log_device_placement,
         gpu_options=gpu_option)
     config = tf.contrib.learn.RunConfig(
-        save_checkpoints_secs=None,
-        save_checkpoints_steps=69000,
         session_config=session_config)
     return tf.estimator.Estimator(model_fn=model_fn, model_dir=model_dir,
                                   params=params, config=config)
@@ -135,23 +129,36 @@ def calculate_prf(gold_count, predict_count, right_count):
 
 
 def calculate_performance(predict_probability, gold, num_class, other_class,
-                          threshold):
-    confusion_matrix = np.zeros((num_class, num_class))
+                          threshold, debug_file="label_debug.txt"):
+    debug_f = None
+    if debug_file != None:
+        debug_f = open(debug_file, "w")
+    confusion_matrix = np.zeros((num_class, num_class), dtype=np.int64)
     # filter max predict prob less than threshold
-    filtered_confusion_matrix = np.zeros((num_class, num_class))
-    for predict, gold_label in zip(predict_probability, gold):
+    filtered_confusion_matrix = np.zeros((num_class, num_class), dtype=np.int64)
+    gold_label_line_count = len(gold)
+    line_count = 0
+    for predict in predict_probability:
+        gold_label = gold[line_count]
         predict_np = np.array(predict)
         predict_label = predict_np.argmax()
+        if debug_f != None:
+            debug_f.write("%d\t%d\n" % (predict_label, gold_label))
         confusion_matrix[gold_label][predict_label] += 1
         if predict_np.max() > threshold:
             filtered_confusion_matrix[gold_label][predict_label] += 1
+        line_count += 1
+    print(gold_label_line_count, line_count)
     # erase 'other' category count
-    for other_id in other_class:
-        print(other_id)
-        filtered_confusion_matrix[other_id, :] = 0
-        filtered_confusion_matrix[:, other_id] = 0
+    print(filtered_confusion_matrix)
     gold_count_category = filtered_confusion_matrix.sum(axis=1)
     predict_count_category = filtered_confusion_matrix.sum(axis=0)
+    for other_id in other_class:
+        gold_count_category[other_id] = 0
+        predict_count_category[other_id] = 0
+    print(gold_count_category)
+    print
+    print(predict_count_category)
     gold_count = 0
     predict_count = 0
     right_count = 0
@@ -166,7 +173,7 @@ def calculate_performance(predict_probability, gold, num_class, other_class,
         gold_count += gold_count_category[i]
         predict_count += predict_count_category[i]
         right_count += filtered_confusion_matrix[i][i]
-    print(gold_count, predict_count, right_count)
+    sys.stdout.write("%d\t%d\t%d\n" % (gold_count, predict_count, right_count))
     return calculate_prf(gold_count, predict_count, right_count)
 
 
@@ -176,24 +183,32 @@ def train():
     labels = [line.split("\t") for line in open(FLAGS.label_file).readlines()]
     other_labels = filter(lambda x: x[1].find("其他") != -1, labels)
     other_labels = set([int(x[0]) for x in other_labels])
-    print("init")
+    print(other_labels)
+    sys.stdout.write("init")
     hook = tf.train.ProfilerHook(save_steps=100, output_dir='./timeline')
     estimator = fasttext_estimator(FLAGS.model_dir)
     for i in xrange(0, FLAGS.num_epochs):
         train_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.TRAIN,
                                                FLAGS.train_records,
                                                FLAGS.batch_size)
-        print("start training epoch %d" % i)
+        sys.stdout.write("start training epoch %d\n" % i)
         # estimator.train(input_fn=train_input, steps=10000, hooks=None)
         estimator.train(input_fn=train_input, hooks=None)
-        print("start evaluate at epoch %d" % i)
+        sys.stdout.write("start evaluate at epoch %d\n" % i)
         predict_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
                                                  FLAGS.eval_records, 1)
         predict = estimator.predict(input_fn=predict_input, hooks=None)
-        print("eval done")
-        print("epoch i precision recall f_score:")
-        print(calculate_performance(predict, gold_label, len(labels),
-                                    other_labels, 0))
+        eval_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
+                                                 FLAGS.eval_records, 1)
+        estimator.evaluate(input_fn=eval_input, hooks=None)
+        train_eval_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
+                                                 FLAGS.train_records, 1)
+        estimator.evaluate(input_fn=train_eval_input, hooks=None)
+        sys.stdout.write("eval done\n")
+        sys.stdout.write("epoch %d precision recall f_score:\n" % i)
+        sys.stdout.write("%f\t%f\t%f\t" % (calculate_performance(predict, gold_label, len(labels),
+                                    other_labels, 0)))
+        sys.stdout.flush()
 
 
 def export_fn():
