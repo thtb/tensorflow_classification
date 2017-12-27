@@ -9,7 +9,8 @@ from collections import Counter
 tf.flags.DEFINE_string("feature_file_prefix", "", "Feature file prefix")
 tf.flags.DEFINE_string("output_dir", ".",
                        "Directory to store tfrecord, vocab and label.")
-tf.flags.DEFINE_boolean("is_fixed_length", False, "whether output fixed length feature")
+tf.flags.DEFINE_boolean("is_fixed_length", False,
+                        "whether output fixed length feature")
 tf.flags.DEFINE_integer("min_feature_count", 1, "min count of feature occur")
 tf.flags.DEFINE_integer("max_length", 2000,
                         "Max length of features for one sample")
@@ -44,7 +45,6 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
 
             sample_size += 1
             label_string = category_separator.join(label_taxonomy[0:level])
-            label = -1
             if label_string in label_map:
                 label = label_map[label_string]
             else:
@@ -60,10 +60,6 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
             feature_count.update(features)
             label_count.update([label])
 
-            if is_fixed_length and len(features) < max_length:
-                for i in xrange(0, max_length - len(features)):
-                    features.append("_PAD")
-
     print("sample size: %d" % sample_size)
     print("label size: %d" % label_index)
 
@@ -71,7 +67,7 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
     feature_index = 0
     feature_list = feature_count.most_common()
     if is_fixed_length:
-        feature_list = [("_UNK", 0), ("_PAD", 0)] + feature_list
+        feature_list = [("_UNK", 10000), ("_PAD", 10000)] + feature_list
     with open(vocab_file, "w") as f:
         for feature in feature_list:
             if feature[1] > min_feature_count:
@@ -85,7 +81,8 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
     return feature_map, label_map
 
 
-def get_feature_list(feature_map, features, real_len, is_fixed_length, max_length):
+def get_feature_list(feature_map, features, is_fixed_length,
+                     max_length):
     # for rnn length should be fix
     if is_fixed_length:
         if len(features) > max_length:
@@ -93,7 +90,7 @@ def get_feature_list(feature_map, features, real_len, is_fixed_length, max_lengt
         features = [
             feature_map[x] if x in feature_map else feature_map["_UNK"]
             for x in features]
-        real_len.append(len(features))
+        real_len = len(features)
         if len(features) < max_length:
             features = features + [feature_map["_PAD"]] * (
                     max_length - len(features))
@@ -102,8 +99,7 @@ def get_feature_list(feature_map, features, real_len, is_fixed_length, max_lengt
         features = filter(lambda x: x in feature_map, features)
         features = [feature_map[x] for x in features]
         real_len = len(features)
-    return features
-    
+    return features, real_len
 
 
 def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
@@ -123,7 +119,6 @@ def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
             if len(label_taxonomy) < int(level):
                 continue
             label_string = category_separator.join(label_taxonomy[0:level])
-            label = -1
             if label_string not in label_map:
                 print("wrong label of line: " + line)
                 continue
@@ -131,8 +126,8 @@ def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
             sample_size += 1
             label = label_map[label_string]
             features = content[1].split(" ")
-            real_len = -1
-            features = get_feature_list(feature_map, features, real_len, is_fixed_length, max_length)
+            features, real_len = get_feature_list(feature_map, features,
+                                                  is_fixed_length, max_length)
             samples.append({
                 "features": features,
                 "label": label,
