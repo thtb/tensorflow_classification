@@ -85,7 +85,7 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
     return feature_map, label_map
 
 
-def get_feature_list(feature_map, features):
+def get_feature_list(feature_map, features, real_len, is_fixed_length, max_length):
     # for rnn length should be fix
     if is_fixed_length:
         if len(features) > max_length:
@@ -101,6 +101,7 @@ def get_feature_list(feature_map, features):
     else:
         features = filter(lambda x: x in feature_map, features)
         features = [feature_map[x] for x in features]
+        real_len = len(features)
     return features
     
 
@@ -130,9 +131,8 @@ def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
             sample_size += 1
             label = label_map[label_string]
             features = content[1].split(" ")
-            features = get_feature_list(feature_map, features)
-
-            real_len = len(features)
+            real_len = -1
+            features = get_feature_list(feature_map, features, real_len, is_fixed_length, max_length)
             samples.append({
                 "features": features,
                 "label": label,

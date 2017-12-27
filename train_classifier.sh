@@ -50,12 +50,12 @@ python classifier.py \
     --model_dir=${output} \
     --export_dir=${export_dir} \
     --embedding_dimension=16 \
-    --attention_dimension=10 \
-    --learning_rate=0.01 \
-    --batch_size=8 \
-    --num_epochs=20 \
+    --use_attention=True \
+    --attention_dimension=8 \
+    --learning_rate=0.001 \
+    --batch_size=4 \
+    --num_epochs=10 \
     --num_threads=2 \
-    --nolog_device_placement \
     --per_process_gpu_memory_fraction=0.45 \
     --fast \
     --debug >stat.txt

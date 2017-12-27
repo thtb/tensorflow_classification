@@ -28,8 +28,9 @@ tf.flags.DEFINE_string("model_dir", ".",
                        "Output directory for checkpoints and summaries")
 tf.flags.DEFINE_string("export_dir", None, "Directory to store savedmodel")
 
-tf.flags.DEFINE_integer("embedding_dimension", 15,
+tf.flags.DEFINE_integer("embedding_dimension", 16,
                         "Dimension of word embedding")
+tf.flags.DEFINE_boolean("use_attention", False, "Whether use attention")
 tf.flags.DEFINE_integer("attention_dimension", 16, "Dimension of attention")
 
 tf.flags.DEFINE_float("learning_rate", 0.001, "Learning rate for training")
@@ -59,17 +60,18 @@ def fasttext_estimator(model_dir):
             [FLAGS.vocab_size + FLAGS.num_oov_vocab_buckets,
              FLAGS.embedding_dimension],
             -1.0 / FLAGS.embedding_dimension, 1.0 / FLAGS.embedding_dimension))
-        # text_embedding = tf.nn.embedding_lookup(text_embedding_w, text_ids)
-        # attention_matrix = tf.contrib.layers.fully_connected(inputs=text_embedding, num_outputs=FLAGS.attention_dimension, activation_fn=tf.nn.tanh)
-        # attention_vector = tf.Variable(tf.random_uniform([FLAGS.attention_dimension], -1.0 / FLAGS.attention_dimension, 1.0 / FLAGS.attention_dimension))
-        ##attention_vector = tf.Variable(tf.zeros([FLAGS.attention_dimension]))
-        # alpha = tf.nn.softmax(tf.reduce_sum(tf.multiply(attention_matrix, attention_vector), axis=2, keep_dims=True), dim=1)
-        # attention_embedding = tf.reduce_sum(tf.multiply(text_embedding, alpha), axis=1, keep_dims=False)
-        # input_layer = attention_embedding
 
-        text_embedding = tf.reduce_mean(tf.nn.embedding_lookup(
-            text_embedding_w, text_ids), axis=-2)
-        input_layer = text_embedding
+        if FLAGS.use_attention:
+            text_embedding = tf.nn.embedding_lookup(text_embedding_w, text_ids)
+            attention_matrix = tf.contrib.layers.fully_connected(inputs=text_embedding, num_outputs=FLAGS.attention_dimension, activation_fn=tf.nn.tanh)
+            attention_vector = tf.Variable(tf.random_uniform([FLAGS.attention_dimension], -1.0 / FLAGS.attention_dimension, 1.0 / FLAGS.attention_dimension))
+            alpha = tf.nn.softmax(tf.reduce_sum(tf.multiply(attention_matrix, attention_vector), axis=2, keep_dims=True), dim=1)
+            attention_embedding = tf.reduce_sum(tf.multiply(text_embedding, alpha), axis=1, keep_dims=False)
+            input_layer = attention_embedding
+        else:
+            text_embedding = tf.reduce_mean(tf.nn.embedding_lookup(
+                text_embedding_w, text_ids), axis=-2)
+            input_layer = text_embedding
 
         logits = tf.contrib.layers.fully_connected(
             inputs=input_layer, num_outputs=num_classes,
@@ -92,15 +94,7 @@ def fasttext_estimator(model_dir):
                 "accuracy": tf.metrics.accuracy(labels, predictions)
             }
         exports = {}
-        # if FLAGS.export_dir:
         probs = tf.nn.softmax(logits)
-        # exports["probs"] = tf.estimator.export.ClassificationOutput(
-        #     scores=probs)
-        # exports["embedding"] = tf.estimator.export.RegressionOutput(
-        #     value=text_embedding)
-        # exports[
-        #     tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY] = \
-        #     tf.estimator.export.ClassificationOutput(scores=probs)
         return tf.estimator.EstimatorSpec(
             mode, predictions=probs, loss=loss, train_op=train_op,
             eval_metric_ops=metrics, export_outputs=exports)
@@ -129,7 +123,7 @@ def calculate_prf(gold_count, predict_count, right_count):
 
 
 def calculate_performance(predict_probability, gold, num_class, other_class,
-                          threshold, debug_file="label_debug.txt"):
+                          threshold, debug_file=None):
     debug_f = None
     if debug_file != None:
         debug_f = open(debug_file, "w")
@@ -148,17 +142,12 @@ def calculate_performance(predict_probability, gold, num_class, other_class,
         if predict_np.max() > threshold:
             filtered_confusion_matrix[gold_label][predict_label] += 1
         line_count += 1
-    print(gold_label_line_count, line_count)
     # erase 'other' category count
-    print(filtered_confusion_matrix)
     gold_count_category = filtered_confusion_matrix.sum(axis=1)
     predict_count_category = filtered_confusion_matrix.sum(axis=0)
     for other_id in other_class:
         gold_count_category[other_id] = 0
         predict_count_category[other_id] = 0
-    print(gold_count_category)
-    print
-    print(predict_count_category)
     gold_count = 0
     predict_count = 0
     right_count = 0
@@ -198,15 +187,9 @@ def train():
         predict_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
                                                  FLAGS.eval_records, 1)
         predict = estimator.predict(input_fn=predict_input, hooks=None)
-        eval_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
-                                                 FLAGS.eval_records, 1)
-        estimator.evaluate(input_fn=eval_input, hooks=None)
-        train_eval_input = inputs.fasttext_input_fn(tf.estimator.ModeKeys.PREDICT,
-                                                 FLAGS.train_records, 1)
-        estimator.evaluate(input_fn=train_eval_input, hooks=None)
         sys.stdout.write("eval done\n")
         sys.stdout.write("epoch %d precision recall f_score:\n" % i)
-        sys.stdout.write("%f\t%f\t%f\t" % (calculate_performance(predict, gold_label, len(labels),
+        sys.stdout.write("%f\t%f\t%f\n" % (calculate_performance(predict, gold_label, len(labels),
                                     other_labels, 0)))
         sys.stdout.flush()
 
