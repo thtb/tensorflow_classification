@@ -1,10 +1,13 @@
+# coding:utf8
+
 import tensorflow as tf
 
 
-def dataset_nn_input_fn(mode,
-                input_file,
-                batch_size,
-                num_epochs=1):
+# 只能处理定长数据，1.4trunk已经支持sparse，但用pip安装的还是只能定长
+def dataset_input_fn(mode,
+                     input_file,
+                     batch_size,
+                     num_epochs=1):
     def input_fn():
         def parser(record):
             keys_to_sample = {
@@ -16,7 +19,7 @@ def dataset_nn_input_fn(mode,
             }
             parsed = tf.parse_single_example(record, keys_to_sample)
             features = tf.sparse_tensor_to_dense(parsed["features"],
-                                                 default_value=" ")
+                                                 default_value=0)
             return features, parsed["label"], parsed["real_len"]
 
         dataset = tf.data.TFRecordDataset(input_file)
@@ -33,8 +36,9 @@ def dataset_nn_input_fn(mode,
     return input_fn
 
 
-def fasttext_input_fn(mode, input_file, batch_size, num_epochs=1,
-                      num_threads=2):
+# 可以处理变长和定长数据
+def batch_reader_input_fn(mode, input_file, batch_size, num_epochs=1,
+                          num_threads=1):
     def input_fn():
         keys_to_sample = {
             "features": tf.VarLenFeature(dtype=tf.int64),

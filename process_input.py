@@ -6,18 +6,18 @@ import os.path
 import tensorflow as tf
 from collections import Counter
 
-tf.flags.DEFINE_string("feature_file_prefix", "", "Feature file prefix")
+tf.flags.DEFINE_string("feature_file_prefix", "", "Feature file prefix.")
 tf.flags.DEFINE_string("output_dir", ".",
                        "Directory to store tfrecord, vocab and label.")
 tf.flags.DEFINE_boolean("is_fixed_length", False,
                         "whether output fixed length feature")
-tf.flags.DEFINE_integer("min_feature_count", 1, "min count of feature occur")
+tf.flags.DEFINE_integer("min_feature_count", 1, "min count of feature occur.")
 tf.flags.DEFINE_integer("max_length", 2000,
-                        "Max length of features for one sample")
+                        "Max length of features for one sample.")
 tf.flags.DEFINE_integer("num_shards", 1,
                         "Number of output_files to create.")
 tf.flags.DEFINE_integer("label_level", 1,
-                        "Level of label to use")
+                        "Level of label to use.")
 FLAGS = tf.flags.FLAGS
 
 

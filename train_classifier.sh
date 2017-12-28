@@ -18,9 +18,9 @@ data_set=$2
 category_level=$3
 min_feature_count=$4
 is_fixed_length=false
-max_length=1000
+sequence_length=512
 model_type=$5
-if [ model_type == "rnn" ]; then
+if [ $model_type == "cnn" ]; then
   is_fixed_length=true
 fi
 echo "$is_fixed_length"
@@ -39,15 +39,17 @@ if [ ! -f ${train_tf_record} ]; then
         --label_level=${category_level} \
         --min_feature_count=${min_feature_count} \
         --is_fixed_length=${is_fixed_length} \
-        --max_length=${max_length}
+        --max_length=${sequence_length}
 fi
 
 label_file=${data_dir}/${data_set}.level${category_level}.labels
 gold_label_file=${data_dir}/${data_set}.test.gold_label
 vocab_file=${data_dir}/${data_set}.level${category_level}.vocab
+label_size=`cat ${label_file} | wc -l | sed -e "s/[ \t]//g"`
 vocab_size=`cat ${vocab_file} | wc -l | sed -e "s/[ \t]//g"`
 
 echo ${vocab_file}
+echo ${label_size}
 echo ${vocab_size}
 
 rm -r ${output}
@@ -57,17 +59,15 @@ python classifier.py \
     --eval_records=${test_tf_record} \
     --gold_label_file=${gold_label_file} \
     --label_file=${label_file} \
-    --vocab_file=${vocab_file} \
-    --vocab_size=${vocab_size} \
     --model_dir=${output} \
-    --export_dir=${export_dir} \
+    --label_size=${label_size} \
+    --vocab_size=${vocab_size} \
+    --num_reader_threads=2 \
     --embedding_dimension=16 \
     --use_attention=True \
     --attention_dimension=8 \
     --learning_rate=0.001 \
-    --batch_size=4 \
+    --batch_size=8 \
     --num_epochs=10 \
-    --num_threads=2 \
-    --per_process_gpu_memory_fraction=0.45 \
-    --fast \
-    --debug >stat.txt
+    --sequence_length=${sequence_length} \
+    --per_process_gpu_memory_fraction=0.45  >stat.txt
