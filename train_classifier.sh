@@ -20,10 +20,11 @@ min_feature_count=$4
 is_fixed_length=false
 sequence_length=512
 model_type=$5
-if [ $model_type == "cnn" ]; then
+if [ "cnn" = ${model_type} ]; then
   is_fixed_length=true
 fi
 echo "$is_fixed_length"
+echo "${model_type}"
 
 output=${data_dir}/models/${data_set}.level${category_level}
 export_dir=${data_dir}/models/${data_set}

@@ -125,12 +125,12 @@ def get_estimator_spec(hidden_layer, mode, labels):
 
 def rnn_estimator(model_dir):
     def model_fn(features, labels, mode):
-        word_embeddings = features(features)
+        word_embeddings = get_word_embedding(features)
         rnn_fw_cell, rnn_bw_cell = None, None
         if FLAGS.cell_type == "lstm":
             rnn_fw_cell = rnn.BasicLSTMCell(FLAGS.rnn_dimension)
             rnn_bw_cell = rnn.BasicLSTMCell(FLAGS.rnn_dimension)
-        elif FLAGS.cell_type == "gpu":
+        elif FLAGS.cell_type == "gru":
             rnn_fw_cell = rnn.GRUCell(FLAGS.rnn_dimension)
             rnn_bw_cell = rnn.GRUCell(FLAGS.rnn_dimension)
         else:
