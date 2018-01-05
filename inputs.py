@@ -25,7 +25,7 @@ def dataset_input_fn(mode,
         dataset = tf.data.TFRecordDataset(input_file)
         dataset = dataset.map(parser)
         if mode == tf.estimator.ModeKeys.TRAIN:
-            dataset = dataset.shuffle(buffer_size=100000)
+            dataset = dataset.shuffle(buffer_size=1000000)
         dataset = dataset.batch(batch_size)
         dataset = dataset.repeat(num_epochs)
         iterator = dataset.make_one_shot_iterator()
@@ -52,7 +52,7 @@ def batch_reader_input_fn(mode, input_file, batch_size, num_epochs=1,
         sample = tf.contrib.learn.read_batch_features(
             input_file, batch_size, keys_to_sample, tf.TFRecordReader,
             num_epochs=num_epochs, reader_num_threads=num_threads,
-            queue_capacity=100000, randomize_input=randomize_input)
+            queue_capacity=1000000, randomize_input=randomize_input)
         features = tf.sparse_tensor_to_dense(sample["features"])
         label = sample["label"]
         return features, label

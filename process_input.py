@@ -1,50 +1,49 @@
+# coding:utf8
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 import os.path
-import tensorflow as tf
 from collections import Counter
 
+import tensorflow as tf
+
+# 输入数据参数
 tf.flags.DEFINE_string("feature_file_prefix", "", "Feature file prefix.")
-tf.flags.DEFINE_string("output_dir", ".",
+tf.flags.DEFINE_string("tfrecord_output_dir", ".",
                        "Directory to store tfrecord, vocab and label.")
-tf.flags.DEFINE_boolean("is_fixed_length", False,
-                        "whether output fixed length feature")
-tf.flags.DEFINE_integer("min_feature_count", 1, "min count of feature occur.")
-tf.flags.DEFINE_integer("max_length", 2000,
+tf.flags.DEFINE_integer("min_feature_count", 0, "min count of feature occur.")
+tf.flags.DEFINE_integer("feature_field", 1,
+                        "feature file in file, separated by '\t'")
+
+# cnn模型参数
+tf.flags.DEFINE_integer("sequence_length", 2000,
                         "Max length of features for one sample.")
-tf.flags.DEFINE_integer("num_shards", 1,
-                        "Number of output_files to create.")
-tf.flags.DEFINE_integer("label_level", 1,
-                        "Level of label to use.")
 FLAGS = tf.flags.FLAGS
 
 
 def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
                                  is_fixed_length=False, max_length=2000,
-                                 level=1, min_feature_count=1):
+                                 min_feature_count=1):
     """Parse features
     Input format: label\t(feature )+\tcomments
     Label format: cate1--cate2--cate3
     """
     print("parsing feature file %s" % train_feature_file)
-    category_separator = "--"
     feature_count = Counter()
     label_count = Counter()
     sample_size = 0
     label_index = 0
     label_map = {}
     id_label_map = {}
+    feature_field = int(FLAGS.feature_field)
     with open(train_feature_file) as f:
         for line in f:
             content = line.split('\t')
-            label_taxonomy = content[0].split(category_separator)
-            if len(label_taxonomy) < int(level):
-                continue
 
             sample_size += 1
-            label_string = category_separator.join(label_taxonomy[0:level])
+            label_string = content[0]
             if label_string in label_map:
                 label = label_map[label_string]
             else:
@@ -52,7 +51,7 @@ def generate_vocab_and_label_map(train_feature_file, vocab_file, label_file,
                 label_map[label_string] = label_index
                 id_label_map[label_index] = label_string
                 label_index += 1
-            features = content[1].split(" ")
+            features = content[feature_field].split(" ")
 
             if is_fixed_length and len(features) >= max_length:
                 features = features[0:max_length]
@@ -103,29 +102,26 @@ def get_feature_list(feature_map, features, is_fixed_length,
 
 
 def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
-                 is_fixed_length=False, max_length=2000, level=1):
+                 is_fixed_length=False, max_length=2000):
     """Parse features
     Input format: label\t(feature )+\tconments
     Label format: cate1--cate2--cate3
     """
     print("parsing feature file %s" % feature_file)
-    category_separator = "--"
     sample_size = 0
     samples = []
+    feature_field = int(FLAGS.feature_field)
     with open(feature_file) as f:
         for line in f:
             content = line.split('\t')
-            label_taxonomy = content[0].split(category_separator)
-            if len(label_taxonomy) < int(level):
-                continue
-            label_string = category_separator.join(label_taxonomy[0:level])
+            label_string = content[0]
             if label_string not in label_map:
                 print("wrong label of line: " + line)
                 continue
 
             sample_size += 1
             label = label_map[label_string]
-            features = content[1].split(" ")
+            features = content[feature_field].split(" ")
             features, real_len = get_feature_list(feature_map, features,
                                                   is_fixed_length, max_length)
             samples.append({
@@ -138,16 +134,11 @@ def to_tf_record(feature_file, feature_map, label_map, max_vocab_size=-1,
     return samples
 
 
-def write_tf_record(samples, output_file, num_shards=1):
+def write_tf_record(samples, output_file):
     """write samples in TFRecord format.
     """
-    shard = 0
-    num_per_shard = len(samples) / num_shards + 1
-    for n, sample in enumerate(samples):
-        if n % num_per_shard == 0:
-            shard += 1
-            writer = tf.python_io.TFRecordWriter(output_file + '-%d-of-%d' %
-                                                 (shard, num_shards))
+    writer = tf.python_io.TFRecordWriter(output_file)
+    for sample in samples:
         tf_record = tf.train.Example()
         for i in xrange(0, len(sample["features"])):
             tf_record.features.feature["features"].int64_list.value.append(
@@ -162,39 +153,33 @@ def write_tf_record(samples, output_file, num_shards=1):
 def main(_):
     train_feature_file = FLAGS.feature_file_prefix + ".train"
     test_feature_file = FLAGS.feature_file_prefix + ".test"
-    label_level = ".level" + str(FLAGS.label_level)
 
     vocab_file = os.path.join(FLAGS.output_dir,
-                              FLAGS.feature_file_prefix
-                              + label_level + ".vocab")
+                              FLAGS.feature_file_prefix + ".vocab")
     label_file = os.path.join(FLAGS.output_dir,
-                              FLAGS.feature_file_prefix
-                              + label_level + ".labels")
+                              FLAGS.feature_file_prefix + ".labels")
     feature_map, label_map = generate_vocab_and_label_map(train_feature_file,
                                                           vocab_file,
                                                           label_file,
                                                           FLAGS.is_fixed_length,
                                                           FLAGS.max_length,
-                                                          FLAGS.label_level,
                                                           FLAGS.min_feature_count)
 
     train_samples = to_tf_record(train_feature_file, feature_map, label_map, -1,
-                                 FLAGS.is_fixed_length, FLAGS.max_length,
-                                 FLAGS.label_level)
+                                 FLAGS.is_fixed_length, FLAGS.max_length)
     output_file = os.path.join(FLAGS.output_dir,
-                               train_feature_file + label_level + ".tfrecord")
-    write_tf_record(train_samples, output_file, FLAGS.num_shards)
+                               train_feature_file + ".tfrecord")
+    write_tf_record(train_samples, output_file)
     with open("article_train.gold_label", "w") as f:
         for sample in train_samples:
             str_sample = [str(x) for x in sample["features"]]
             f.write("%d\t%s\n" % (sample["label"], "_".join(str_sample)))
 
     test_samples = to_tf_record(test_feature_file, feature_map, label_map, -1,
-                                FLAGS.is_fixed_length, FLAGS.max_length,
-                                FLAGS.label_level)
+                                FLAGS.is_fixed_length, FLAGS.max_length)
     output_file = os.path.join(FLAGS.output_dir,
-                               test_feature_file + label_level + ".tfrecord")
-    write_tf_record(test_samples, output_file, 1)
+                               test_feature_file + ".tfrecord")
+    write_tf_record(test_samples, output_file)
 
     with open(test_feature_file + ".gold_label", "w") as f:
         for sample in test_samples:
